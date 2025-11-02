@@ -1,9 +1,13 @@
 package com.example.lab_week_08
 
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.work.Constraints
@@ -87,9 +91,18 @@ class MainActivity : AppCompatActivity() {
                 info?.let {
                     if (it.state.isFinished) {
                         showResult("Second process is done")
+                        launchNotificationService()
                     }
                 }
             }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED) {
+
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+            }
+        }
 
     }
     //Build the data into the correct format before passing it to the worker as input
@@ -101,4 +114,31 @@ class MainActivity : AppCompatActivity() {
     private fun showResult(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
+
+    //Launch the NotificationService
+    private fun launchNotificationService() {
+        //Observe if the service process is done or not
+        //If it is, show a toast with the channel ID in it
+        NotificationService.trackingCompletion.observe(
+            this) { Id ->
+            showResult("Process for Notification Channel ID $Id is done!")
+        }
+
+        //Create an Intent to start the NotificationService
+        //An ID of "001" is also passed as the notification channel ID
+        val serviceIntent = Intent(
+            this,
+            NotificationService::class.java
+        ).apply {
+            putExtra(EXTRA_ID, "001")
+        }
+
+        //Start the foreground service through the Service Intent
+        ContextCompat.startForegroundService(this, serviceIntent)
+    }
+    companion object{
+        const val EXTRA_ID = "Id"
+    }
+
 }
+
