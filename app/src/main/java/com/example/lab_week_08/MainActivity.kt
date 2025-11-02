@@ -14,15 +14,22 @@ import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.example.lab_week_08.worker.FirstWorker
 import com.example.lab_week_08.worker.SecondWorker
+// BARU: Import worker dan service yang baru
+import com.example.lab_week_08.worker.ThirdWorker
 
 class MainActivity : AppCompatActivity() {
-    //Create an instance of a work manager
-    //Work manager manages all your requests and workers
-    //it also sets up the sequence for all your processes
+
     private val workManager = WorkManager.getInstance(this)
+
+    // BARU: Definisikan network constraints di sini agar bisa dipakai ulang
+    private val networkConstraints = Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.CONNECTED)
+        .build()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -34,82 +41,64 @@ class MainActivity : AppCompatActivity() {
                 systemBars.bottom)
             insets
         }
-        //Create a constraint of which your workers are bound to.
-        //Here the workers cannot execute the given process if
-        //there's no internet connection
-        val networkConstraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
+
+        // Pindahkan requestPermission ke atas agar lebih rapi
+        checkNotificationPermission()
+
+        // Jalankan rantai WorkManager
+        startWorkChain()
+    }
+
+    private fun startWorkChain() {
         val id = "001"
-        //There are two types of work request:
-        //OneTimeWorkRequest and PeriodicWorkRequest
-        //OneTimeWorkRequest executes the request just once
-        //PeriodicWorkRequest executed the request periodically
-        //Create a one time work request that includes
-        //all the constraints and inputs needed for the worker
-        //This request is created for the FirstWorker class
+
         val firstRequest = OneTimeWorkRequest
             .Builder(FirstWorker::class.java)
             .setConstraints(networkConstraints)
             .setInputData(getIdInputData(FirstWorker
                 .INPUT_DATA_ID, id)
             ).build()
-        //This request is created for the SecondWorker class
+
         val secondRequest = OneTimeWorkRequest
             .Builder(SecondWorker::class.java)
             .setConstraints(networkConstraints)
             .setInputData(getIdInputData(SecondWorker
                 .INPUT_DATA_ID, id)
             ).build()
-        //Sets up the process sequence from the work manager instance
-        //Here it starts with FirstWorker, then SecondWorker
+
         workManager.beginWith(firstRequest)
             .then(secondRequest)
             .enqueue()
-        //All that's left to do is getting the output
-        //Here, we receive the output and displaying the result as a toast message
-        //You may notice the keyword "LiveData" and "observe"
-        //LiveData is a data holder class in Android Jetpack
-        //that's used to make a more reactive application
-        //the reactive of it comes from the observe keyword,
-        //which observes any data changes and immediately update the app UI
 
-        //Here we're observing the returned LiveData and getting the
-        //state result of the worker (Can be SUCCEEDED, FAILED, or CANCELLED)
-        //isFinished is used to check if the state is either SUCCEEDED or FAILED
+        // Observer untuk FirstWorker
         workManager.getWorkInfoByIdLiveData(firstRequest.id)
             .observe(this) { info ->
                 info?.let {
-                    if (it.state.isFinished) {
+                    if (it.state == WorkInfo.State.SUCCEEDED) { // Lebih baik cek SUCCEEDED
                         showResult("First process is done")
                     }
                 }
             }
 
+        // Observer untuk SecondWorker (Pemicu NotificationService)
         workManager.getWorkInfoByIdLiveData(secondRequest.id)
             .observe(this) { info ->
                 info?.let {
-                    if (it.state.isFinished) {
+                    if (it.state == WorkInfo.State.SUCCEEDED) { // Lebih baik cek SUCCEEDED
                         showResult("Second process is done")
+                        // Langkah 3: Jalankan Notif Service Pertama
                         launchNotificationService()
                     }
                 }
             }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
-                PackageManager.PERMISSION_GRANTED) {
-
-                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
-            }
-        }
-
     }
+
     //Build the data into the correct format before passing it to the worker as input
     private fun getIdInputData(idKey: String, idValue: String) =
         Data.Builder()
             .putString(idKey, idValue)
             .build()
+
     //Show the result as toast
     private fun showResult(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
@@ -120,12 +109,16 @@ class MainActivity : AppCompatActivity() {
         //Observe if the service process is done or not
         //If it is, show a toast with the channel ID in it
         NotificationService.trackingCompletion.observe(
-            this) { Id ->
-            showResult("Process for Notification Channel ID $Id is done!")
+            this) { id ->
+            // Pastikan observer ini hanya berjalan sekali
+            NotificationService.trackingCompletion.removeObservers(this)
+
+            showResult("Process for Notification Channel ID $id is done!")
+
+            // BARU: Langkah 4 -> Jalankan ThirdWorker
+            launchThirdWorker()
         }
 
-        //Create an Intent to start the NotificationService
-        //An ID of "001" is also passed as the notification channel ID
         val serviceIntent = Intent(
             this,
             NotificationService::class.java
@@ -133,12 +126,74 @@ class MainActivity : AppCompatActivity() {
             putExtra(EXTRA_ID, "001")
         }
 
-        //Start the foreground service through the Service Intent
         ContextCompat.startForegroundService(this, serviceIntent)
     }
-    companion object{
-        const val EXTRA_ID = "Id"
+
+    // BARU: Fungsi untuk menjalankan ThirdWorker
+    private fun launchThirdWorker() {
+        val id = "002" // Kita gunakan ID baru
+
+        val thirdRequest = OneTimeWorkRequest
+            .Builder(ThirdWorker::class.java)
+            .setConstraints(networkConstraints) // Pakai constraints yang sama
+            .setInputData(getIdInputData(ThirdWorker.INPUT_DATA_ID, id))
+            .build()
+
+        workManager.enqueue(thirdRequest)
+
+        // BARU: Observer untuk ThirdWorker (Pemicu SecondNotificationService)
+        workManager.getWorkInfoByIdLiveData(thirdRequest.id)
+            .observe(this) { info ->
+                info?.let {
+                    if (it.state == WorkInfo.State.SUCCEEDED) {
+                        // Pastikan observer ini hanya berjalan sekali
+                        workManager.getWorkInfoByIdLiveData(thirdRequest.id).removeObservers(this)
+
+                        showResult("Third process is done")
+
+                        // BARU: Langkah 5 -> Jalankan Notif Service Kedua
+                        launchSecondNotificationService()
+                    }
+                }
+            }
     }
 
-}
+    // BARU: Fungsi untuk menjalankan SecondNotificationService
+    private fun launchSecondNotificationService() {
+        // Observe service kedua
+        SecondNotificationService.trackingCompletion.observe(this) { id ->
+            SecondNotificationService.trackingCompletion.removeObservers(this)
+            showResult("Process for Second Notification Channel ID $id is done!")
+        }
 
+        // Buat Intent untuk service kedua
+        val serviceIntent = Intent(
+            this,
+            SecondNotificationService::class.java
+        ).apply {
+            // Gunakan Key ID yang baru dari companion object service kedua
+            putExtra(SecondNotificationService.EXTRA_ID, "002")
+        }
+
+        ContextCompat.startForegroundService(this, serviceIntent)
+    }
+
+    // BARU: Fungsi untuk cek izin notifikasi
+    private fun checkNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED) {
+
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+            }
+        }
+    }
+
+    companion object{
+        // Tetap gunakan ini untuk Service pertama
+        const val EXTRA_ID = "Id"
+
+        // (Tidak perlu EXTRA_ID2 di sini karena kita mengambilnya
+        // langsung dari companion object SecondNotificationService)
+    }
+}
